@@ -2,7 +2,52 @@ import yt_dlp
 import os
 import logging
 import random
+import shutil
 from config import COOKIES_FILE, DOWNLOAD_DIR, SEARCH_OVERFETCH
+
+
+def _find_ffmpeg():
+    """
+    Mendeteksi apakah ffmpeg tersedia di sistem.
+    Returns path ke ffmpeg jika ditemukan, None jika tidak.
+    """
+    # 1. Cek di PATH
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return os.path.dirname(ffmpeg_path)
+
+    # 2. Cek lokasi umum di Windows
+    common_paths = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages"),
+        r"C:\ffmpeg\bin",
+        r"C:\Program Files\ffmpeg\bin",
+        r"C:\tools\ffmpeg\bin",
+    ]
+    for p in common_paths:
+        if os.path.isdir(p):
+            candidate = os.path.join(p, "ffmpeg.exe")
+            if os.path.isfile(candidate):
+                return p
+            # WinGet menyimpan di sub-folder, cari rekursif 1 level
+            for sub in os.listdir(p):
+                candidate = os.path.join(p, sub, "ffmpeg-*", "bin", "ffmpeg.exe")
+                import glob as _g
+                matches = _g.glob(os.path.join(p, sub, "**", "ffmpeg.exe"), recursive=True)
+                if matches:
+                    return os.path.dirname(matches[0])
+
+    return None
+
+
+FFMPEG_DIR = _find_ffmpeg()
+HAS_FFMPEG = FFMPEG_DIR is not None
+if HAS_FFMPEG:
+    logging.getLogger(__name__).info(f"FFmpeg ditemukan di: {FFMPEG_DIR}")
+else:
+    logging.getLogger(__name__).warning(
+        "FFmpeg TIDAK ditemukan di PATH. Download akan menggunakan format single-stream (kualitas mungkin lebih rendah). "
+        "Install ffmpeg lalu restart aplikasi untuk kualitas terbaik."
+    )
 
 # Keyword modifier untuk memastikan hasil pencarian adalah video REMIX/KOMPILASI
 # yang di-reupload orang lain, bukan konten original (mengurangi risiko copyright).
@@ -38,12 +83,17 @@ def get_base_ydl_opts(download=False, output_path=None):
     """
     Konfigurasi dasar yt-dlp.
     Menggunakan cookies.txt jika file tersebut ada untuk scrape dari Sosmed yang dikunci (misal IG).
+    Otomatis menambahkan ffmpeg_location jika ffmpeg ditemukan di lokasi non-PATH.
     """
     opts = {
         'quiet': True,
         'no_warnings': True,
         'extract_flat': not download,
     }
+    
+    # Tambahkan lokasi ffmpeg jika ditemukan
+    if HAS_FFMPEG and FFMPEG_DIR:
+        opts['ffmpeg_location'] = FFMPEG_DIR
     
     if os.path.exists(COOKIES_FILE):
         opts['cookiefile'] = COOKIES_FILE
@@ -151,7 +201,14 @@ def download_video(url, output_dir=DOWNLOAD_DIR):
     os.makedirs(output_dir, exist_ok=True)
         
     ydl_opts = get_base_ydl_opts(download=True, output_path=output_dir)
-    ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    
+    if HAS_FFMPEG:
+        # FFmpeg tersedia: bisa merge video+audio terpisah untuk kualitas terbaik
+        ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    else:
+        # FFmpeg TIDAK tersedia: gunakan format single-stream (sudah gabungan)
+        ydl_opts['format'] = 'best[ext=mp4]/best'
+        logging.info("Menggunakan format single-stream (ffmpeg tidak tersedia)")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
