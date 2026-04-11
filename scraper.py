@@ -3,7 +3,9 @@ import os
 import logging
 import random
 import shutil
-from config import COOKIES_FILE, DOWNLOAD_DIR, SEARCH_OVERFETCH
+import requests
+from config import (COOKIES_FILE, DOWNLOAD_DIR, SEARCH_OVERFETCH,
+                    RAPIDAPI_KEY, RAPIDAPI_HOST_TIKTOK, RAPIDAPI_HOST_FB, RAPIDAPI_HOST_IG)
 
 
 def _find_ffmpeg():
@@ -77,6 +79,18 @@ CONTENT_TYPE_MAP = {
     "Meme": "meme funny",
     "Tips & Tricks": "tips tricks tutorial",
     "Random (Acak)": None,  # akan dipilih acak
+    "Custom (Tanpa Tipe)": "", # tidak ditambah apa-apa
+}
+
+# ═══════════════════════════════════════════════════════════════
+# PLATFORM SEARCH MODIFIERS — Tailored per platform agar konten
+# yang ditemukan via YouTube cocok untuk di-reupload ke target
+# ═══════════════════════════════════════════════════════════════
+PLATFORM_SEARCH_STYLE = {
+    "youtube": "creative commons no copyright shorts",
+    "instagram": "reels short video vertical no copyright",
+    "tiktok": "tiktok short video vertical trending no copyright",
+    "facebook": "viral video facebook reupload no copyright",
 }
 
 def get_base_ydl_opts(download=False, output_path=None):
@@ -105,79 +119,223 @@ def get_base_ydl_opts(download=False, output_path=None):
         
     return opts
 
+
+def _get_modifier_str(content_type=None):
+    """Helper: dapatkan modifier string dari content_type dropdown."""
+    if content_type in CONTENT_TYPE_MAP:
+        mapped_val = CONTENT_TYPE_MAP[content_type]
+        if mapped_val is not None:
+            return mapped_val
+            
+    # Fallback jika None (misal: Random (Acak))
+    num_modifiers = random.randint(1, 2)
+    chosen_mods = random.sample(REMIX_MODIFIERS, num_modifiers)
+    return " ".join(chosen_mods)
+
+
 def _build_remix_query(keyword, platform, limit, content_type=None):
     """
-    Membangun search query yang menargetkan konten REMIX/KOMPILASI.
+    Membangun search query YouTube (ytsearch) yang disesuaikan per platform.
+    
+    yt-dlp hanya mendukung native search di YouTube. Untuk platform lain
+    (Instagram, TikTok, Facebook), kita tetap cari via YouTube tapi dengan
+    modifier khusus agar konten yang ditemukan cocok untuk di-reupload ke
+    platform target (misal: short/vertical untuk IG & TikTok, viral untuk FB).
     
     Args:
         keyword: Kata kunci pencarian (niche)
-        platform: Platform target (youtube, instagram, facebook)
+        platform: Platform target (youtube, instagram, tiktok, facebook)
         limit: Jumlah hasil yang diminta
         content_type: Tipe konten dari dropdown (opsional). 
                       Jika None atau "Random (Acak)", modifier dipilih acak.
     """
     # Tentukan modifier berdasarkan content_type dropdown
-    if content_type and content_type in CONTENT_TYPE_MAP and CONTENT_TYPE_MAP[content_type]:
-        modifier_str = CONTENT_TYPE_MAP[content_type]
-    else:
-        # Fallback: pilih 1-2 modifier secara acak
-        num_modifiers = random.randint(1, 2)
-        chosen_mods = random.sample(REMIX_MODIFIERS, num_modifiers)
-        modifier_str = " ".join(chosen_mods)
+    modifier_str = _get_modifier_str(content_type)
     
-    if platform == 'youtube':
-        search_query = f"ytsearch{limit}:{keyword} {modifier_str} creative commons no copyright shorts"
-    elif platform == 'instagram':
-        search_query = f"{keyword} {modifier_str} no copyright"
-    elif platform == 'tiktok':
-        search_query = f"{keyword} {modifier_str} tiktok edit no copyright"
-    elif platform == 'facebook':
-        search_query = f"{keyword} {modifier_str} no copyright"
-    else:
-        search_query = f"{keyword} {modifier_str} no copyright"
+    # Platform style modifier (short/vertical/viral/etc.)
+    platform_style = PLATFORM_SEARCH_STYLE.get(platform, "no copyright")
     
-    logging.info(f"Search query [{platform}] (remix mode): {search_query}")
+    # Semua platform pakai ytsearch — satu-satunya search yang reliable di yt-dlp
+    search_query = f"ytsearch{limit}:{keyword} {modifier_str} {platform_style}"
+    
+    logging.info(f"Search query [{platform}]: {search_query}")
     return search_query
+
+
+# ═══════════════════════════════════════════════════════════════
+# TIER 1: RAPIDAPI SPECIALIZED SCRAPERS (TEMPLATES)
+# ═══════════════════════════════════════════════════════════════
+
+def _search_tiktok_rapidapi(query, limit):
+    """
+    Template RapidAPI Tiktok Scraper (ex: TIKWM API)
+    Ganti logic ekstrak JSON sesuai docs RapidAPI saat berlangganan.
+    """
+    if not RAPIDAPI_KEY or not RAPIDAPI_HOST_TIKTOK:
+        return []
+        
+    url = f"https://{RAPIDAPI_HOST_TIKTOK}/feed/list"
+    querystring = {"region": "ID", "keywords": query, "count": limit}
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST_TIKTOK
+    }
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        results = []
+        # PLACEHOLDER: Ekstrak JSON (sesuaikan dengan format real TIKWM-Default!)
+        items = data.get("data", {}).get("videos", []) 
+        for item in items[:limit]:
+            vid_url = item.get("play") # URL video asli no-watermark
+            title = item.get("title", "TikTok Video")
+            if vid_url:
+                results.append({'title': title, 'url': vid_url, 'platform': 'tiktok'})
+        return results
+    except Exception as e:
+        logging.error(f"RapidAPI TikTok Error: {e}")
+        return []
+
+def _search_facebook_rapidapi(query, limit):
+    """Template RapidAPI FB Pages Scraper (ex: FinCal Insights)"""
+    if not RAPIDAPI_KEY or not RAPIDAPI_HOST_FB:
+        return []
+        
+    url = f"https://{RAPIDAPI_HOST_FB}/search/videos"
+    querystring = {"query": query, "count": limit} 
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST_FB
+    }
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        results = []
+        items = data.get("items", []) 
+        for item in items[:limit]:
+            vid_url = item.get("video_url")
+            title = item.get("title", "Facebook Video")
+            if vid_url:
+                results.append({'title': title, 'url': vid_url, 'platform': 'facebook'})
+        return results
+    except Exception as e:
+        logging.error(f"RapidAPI FB Error: {e}")
+        return []
+
+def _search_instagram_rapidapi(query, limit):
+    """Template RapidAPI Instagram Scraper API"""
+    if not RAPIDAPI_KEY or not RAPIDAPI_HOST_IG:
+        return []
+        
+    url = f"https://{RAPIDAPI_HOST_IG}/v1/search/reels" 
+    querystring = {"keyword": query, "limit": limit}
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": RAPIDAPI_HOST_IG
+    }
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        results = []
+        items = data.get("data", {}).get("reels", []) 
+        for item in items[:limit]:
+            vid_url = item.get("video_url")
+            title = item.get("caption", "Instagram Reel")
+            if vid_url:
+                results.append({'title': title, 'url': vid_url, 'platform': 'instagram'})
+        return results
+    except Exception as e:
+        logging.error(f"RapidAPI IG Error: {e}")
+        return []
+
 
 def search_videos(keyword, platform='youtube', limit=10, content_type=None):
     """
-    Mencari video berdasarkan platform.
-    Otomatis menargetkan konten remix/kompilasi untuk mengurangi risiko copyright.
+    Mencari video via YouTube search (ytsearch) untuk SEMUA platform.
+    
+    Kenapa YouTube search untuk semua?
+    → yt-dlp HANYA mendukung native search di YouTube.
+      Instagram, TikTok, Facebook tidak punya fitur search di yt-dlp
+      (butuh cookies + extractor sering rusak).
+    → Konten yang ditemukan di YouTube tetap bisa di-download & di-reupload
+      ke platform target manapun.
+    → Query disesuaikan per platform (shorts/vertical untuk IG & TikTok, 
+      viral untuk FB) agar konten yang ditemukan relevan.
     
     Args:
         keyword: Kata kunci pencarian
-        platform: Platform target
+        platform: Platform target (menentukan style query)
         limit: Jumlah hasil
         content_type: Tipe konten dari dropdown UI
     """
     results = []
     
+    # Clean query khusus untuk RapidAPI native search 
+    # (tanpa atribut ytsearch: dan tanpa atribut platform style bawaan yt-dlp)
+    modifier_str = _get_modifier_str(content_type)
+    clean_rapidapi_query = f"{keyword} {modifier_str}".strip()
+    
     search_query = _build_remix_query(keyword, platform, limit, content_type)
     
+    # ── TIER 1: RAPIDAPI SCRAPERS ──
+    if platform == "tiktok":
+        logging.info(f"Mencoba TikTok RapidAPI (Query: '{clean_rapidapi_query}')...")
+        results = _search_tiktok_rapidapi(clean_rapidapi_query, limit)
+    elif platform == "facebook":
+        logging.info(f"Mencoba Facebook RapidAPI (Query: '{clean_rapidapi_query}')...")
+        results = _search_facebook_rapidapi(clean_rapidapi_query, limit)
+    elif platform == "instagram":
+        logging.info(f"Mencoba Instagram RapidAPI (Query: '{clean_rapidapi_query}')...")
+        results = _search_instagram_rapidapi(clean_rapidapi_query, limit)
+        
+    if results:
+        logging.info(f"Berhasil mendapat {len(results)} video via RapidAPI Spesialis!")
+        return results
+        
+    logging.warning(f"[{platform}] RapidAPI kosong/error (atau KEY belum diset). Fallback ke yt-dlp YouTube Search...")
+    
+    # ── TIER 2: FALLBACK YT-DLP YOUTUBE SEARCH ──
     ydl_opts = get_base_ydl_opts(download=False)
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(search_query, download=False)
             
-            if 'entries' in info:
+            if info and 'entries' in info:
                 for entry in info['entries']:
-                    if not entry: continue
+                    if not entry:
+                        continue
                     
                     vid_url = entry.get('url') or entry.get('webpage_url')
-                    # Khusus YouTube, kalau cuma dapet ID, kita ubah ke URL
-                    if platform == 'youtube' and vid_url and not vid_url.startswith('http'):
+                    
+                    # YouTube search: kalau cuma dapet ID, ubah ke full URL
+                    if vid_url and not vid_url.startswith('http'):
                         vid_url = f"https://www.youtube.com/watch?v={entry.get('id')}"
                         
-                    results.append({
-                        'title': entry.get('title', 'Unknown Title'),
-                        'url': vid_url,
-                        'platform': platform
-                    })
+                    if vid_url:
+                        results.append({
+                            'title': entry.get('title', 'Unknown Title'),
+                            'url': vid_url,
+                            'platform': platform
+                        })
     except yt_dlp.utils.DownloadError as e:
-        logging.error(f"Error Jaringan saat {platform}: {e}")
+        error_str = str(e)
+        if any(kw in error_str.lower() for kw in ['cookie', 'login', 'sign in', 'authentication']):
+            logging.error(
+                f"[{platform}] ⚠ YouTube meminta autentikasi! "
+                f"Siapkan cookies.txt dari browser. "
+                f"Lihat: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp | Detail: {e}"
+            )
+        else:
+            logging.error(f"Error saat search fallback [{platform}]: {e}")
     except Exception as e:
-        logging.error(f"Error Tak Terduga (Scraping): {e}")
+        logging.error(f"Error Tak Terduga (Search Fallback {platform}): {e}")
         
     return results
 

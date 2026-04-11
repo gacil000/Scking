@@ -1,5 +1,6 @@
 from config import (setup_logging, ensure_directories, COOKIES_FILE, DOWNLOAD_DIR,
-                    OPENAI_API_KEY, GEMINI_API_KEY, MAX_WORKERS, TITLE_TRUNCATE_LEN, SEARCH_OVERFETCH)
+                    OPENAI_API_KEY, GEMINI_API_KEY, MAX_WORKERS, TITLE_TRUNCATE_LEN, SEARCH_OVERFETCH,
+                    ENABLE_TRENDS_CHECK, MIN_TREND_SCORE)
 from content_generator import generate_caption
 import customtkinter as ctk
 import threading
@@ -51,6 +52,7 @@ CONTENT_TYPES = [
     "Meme",
     "Tips & Tricks",
     "Random (Acak)",
+    "Custom (Tanpa Tipe)",
 ]
 
 LIMIT_OPTIONS = ["5", "10", "15", "20", "30", "50"]
@@ -450,6 +452,44 @@ class PlatformTab:
             self.set_status("⚠ Limit tidak valid, menggunakan default 10.")
         content_type = self.content_type_var.get()
         
+        is_custom = self.niche_var.get() == "Custom..."
+        
+        if ENABLE_TRENDS_CHECK:
+            self._set_busy(True, "Mengecek tren...")
+            self.set_status(f"📈 Mengecek viralitas '{keyword}'...")
+            
+            def trend_check_task():
+                from scraper import _get_modifier_str
+                modifier_str = _get_modifier_str(content_type)
+                try:
+                    from trends_checker import check_trend_score
+                    score, status = check_trend_score(keyword, modifier_str, is_custom)
+                    
+                    if status == 'API_ERROR_FAILSAFE':
+                        self.app.after(0, lambda: self.set_status(f"⚠ Cek tren API error. Meloloskan pencarian."))
+                        self.app.after(0, lambda: self._proceed_search(keyword, limit, content_type))
+                    elif score < MIN_TREND_SCORE:
+                        self.app.after(0, lambda: self._set_busy(False))
+                        self.app.after(0, lambda: self.set_status(f"❌ Keyword tidak viral (Skor: {score} < {MIN_TREND_SCORE})", True))
+                        self.app.after(0, lambda: messagebox.showwarning(
+                            "Trend Terlalu Rendah",
+                            f"Keyword: '{keyword}'\nTipe: {content_type}\n\n"
+                            f"Mendapat skor popularitas {score}/100.\n"
+                            f"Angka ini di bawah batas minimal ({MIN_TREND_SCORE}). Silakan cari keyword yang sedang viral!"
+                        ))
+                    else:
+                        self.app.after(0, lambda: self.set_status(f"✅ Viralitas Lolos (Skor: {score}). Mencari video..."))
+                        self.app.after(0, lambda: self._proceed_search(keyword, limit, content_type))
+                except Exception as e:
+                    logging.error(f"Trend Checker exception: {e}")
+                    self.app.after(0, lambda: self.set_status(f"⚠ Error cek tren. Meloloskan pencarian."))
+                    self.app.after(0, lambda: self._proceed_search(keyword, limit, content_type))
+            
+            threading.Thread(target=trend_check_task, daemon=True).start()
+        else:
+            self._proceed_search(keyword, limit, content_type)
+            
+    def _proceed_search(self, keyword, limit, content_type):
         # Cek histori
         with get_db() as db:
             existing_count = db.query(Video).filter_by(platform=self.platform).count()
@@ -462,6 +502,7 @@ class PlatformTab:
                     "CANCEL: Batalkan."
                 )
                 if choice is None:
+                    self._set_busy(False)
                     return
                 elif choice is True:
                     db.query(Video).filter_by(platform=self.platform).delete()

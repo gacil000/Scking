@@ -43,6 +43,16 @@ RENDER_THREADS = 4               # Jumlah thread untuk video rendering
 CAPTION_MAX_TOKENS = 150         # Max token untuk AI caption generation
 UPLOAD_POLL_DELAY = 2            # Delay (detik) setelah upload API call
 
+# ── Google Trends Configuration ──
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "").strip()
+RAPIDAPI_HOST_TRENDS = os.getenv("RAPIDAPI_HOST_TRENDS", "google-trends-api.p.rapidapi.com").strip()
+RAPIDAPI_HOST_TIKTOK = os.getenv("RAPIDAPI_HOST_TIKTOK", "tiktok-scraper7.p.rapidapi.com").strip()
+RAPIDAPI_HOST_FB = os.getenv("RAPIDAPI_HOST_FB", "facebook-pages-scraper.p.rapidapi.com").strip()
+RAPIDAPI_HOST_IG = os.getenv("RAPIDAPI_HOST_IG", "instagram-scraper-api.p.rapidapi.com").strip()
+
+MIN_TREND_SCORE = int(os.getenv("MIN_TREND_SCORE", "40"))
+ENABLE_TRENDS_CHECK = os.getenv("ENABLE_TRENDS_CHECK", "True").lower() in ('true', '1', 't')
+
 # Parsing LOG_LEVEL string ke integer object
 numeric_level = getattr(logging, LOG_LEVEL_STR.upper(), logging.INFO)
 
