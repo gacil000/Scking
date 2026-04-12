@@ -1,6 +1,7 @@
 # Environment & Secrets
 .env
 test_api.json   
+Scratch.py
 # Database
 *.db
 

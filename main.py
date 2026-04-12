@@ -376,7 +376,7 @@ class PlatformTab:
         """Membuat baris UI tunggal"""
         row = self.current_row
         
-        id_lbl = ctk.CTkLabel(self.table_frame, text=str(vid.id), width=40, font=ctk.CTkFont(size=11))
+        id_lbl = ctk.CTkLabel(self.table_frame, text=str(row), width=40, font=ctk.CTkFont(size=11))
         id_lbl.grid(row=row, column=0, padx=6, pady=4)
         
         title_text = (vid.title or "Untitled")[:TITLE_TRUNCATE_LEN]
