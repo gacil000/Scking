@@ -30,7 +30,8 @@ Tugasmu adalah menulis ulang judul video asli ini: '{title}'
 Menjadi sebuah caption viral untuk platform {platform.upper()}.
 Gunakan format 'Curiosity Hook' atau 'Value Hook'.
 Tambahkan 3-5 hashtag yang sangat relevan.
-Jangan terlalu panjang, buat natural dan mengundang komentar!"""
+Jangan terlalu panjang, buat natural dan mengundang komentar!
+PENTING: Langsung tuliskan caption-nya sekarang tanpa basa-basi!"""
 
 def _generate_with_openai(title: str, platform: str) -> str:
     if not OPENAI_API_KEY:
@@ -64,12 +65,18 @@ def _generate_with_gemini(title: str, platform: str) -> str:
         )
         
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(_get_prompt(title, platform))
+        from google import genai
+        # Menggunakan SDK baru `google.genai` karena `google.generativeai` telah deprecated
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=_get_prompt(title, platform),
+            config=genai.types.GenerateContentConfig(
+                max_output_tokens=CAPTION_MAX_TOKENS,
+                temperature=0.7,
+            )
+        )
         return response.text.strip()
     except Exception as e:
         logger.error(f"Gemini Error: {e}")
         raise
-

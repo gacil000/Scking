@@ -412,7 +412,8 @@ class PlatformTab:
     def refresh_table(self):
         """In-Place Update per platform"""
         with get_db() as db:
-            videos = db.query(Video).filter_by(platform=self.platform).all()
+            # Hanya memunculkan video yang bukan ARSIP (sudah dihapus dari UI tapi tetap di DB sebagai history)
+            videos = db.query(Video).filter(Video.platform==self.platform, Video.status != 'ARSIP').all()
             for vid in videos:
                 if vid.id in self.status_labels_map:
                     lbl = self.status_labels_map[vid.id]
@@ -492,7 +493,7 @@ class PlatformTab:
     def _proceed_search(self, keyword, limit, content_type):
         # Cek histori
         with get_db() as db:
-            existing_count = db.query(Video).filter_by(platform=self.platform).count()
+            existing_count = db.query(Video).filter(Video.platform==self.platform, Video.status != 'ARSIP').count()
             if existing_count > 0:
                 choice = messagebox.askyesnocancel(
                     f"Video {self.platform.upper()} Sudah Ada",
@@ -505,7 +506,11 @@ class PlatformTab:
                     self._set_busy(False)
                     return
                 elif choice is True:
-                    db.query(Video).filter_by(platform=self.platform).delete()
+                    # Alih-alih mendelete, kita 'Arsip'-kan supaya tidak terscrape lagi di masa depan
+                    videosToArchive = db.query(Video).filter(Video.platform==self.platform, Video.status != 'ARSIP').all()
+                    for v in videosToArchive:
+                        v.status = 'ARSIP'
+                    db.commit()
                     self.clear_ui_table()
         
         self._set_busy(True, "Mencari...")
@@ -764,7 +769,7 @@ class PlatformTab:
         if self.is_busy:
             return
         with get_db() as db:
-            count = db.query(Video).filter_by(platform=self.platform).count()
+            count = db.query(Video).filter(Video.platform==self.platform, Video.status != 'ARSIP').count()
         if count == 0:
             self.set_status("ℹ Tabel sudah kosong.")
             return
@@ -775,10 +780,13 @@ class PlatformTab:
         )
         if choice:
             with get_db() as db:
-                db.query(Video).filter_by(platform=self.platform).delete()
+                # Mengubah status jadi ARSIP agar jadi blacklist history, tidak memberatkan UI
+                videosToArchive = db.query(Video).filter(Video.platform==self.platform, Video.status != 'ARSIP').all()
+                for v in videosToArchive:
+                    v.status = 'ARSIP'
                 db.commit()
             self.clear_ui_table()
-            self.set_status("🧹 Data berhasil dihapus.")
+            self.set_status("🧹 Data diarsipkan (riwayat tetap aman).")
 
 
 # ═══════════════════════════════════════════════════════════════

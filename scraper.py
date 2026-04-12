@@ -186,8 +186,8 @@ def _search_tiktok_rapidapi(query, limit):
         data = response.json()
         
         results = []
-        # PLACEHOLDER: Ekstrak JSON (sesuaikan dengan format real TIKWM-Default!)
-        items = data.get("data", {}).get("videos", []) 
+        # Menggunakan struktur JSON riil dari tiktok-scraper7 (mereturn list di dalam key "data")
+        items = data.get("data", []) 
         for item in items[:limit]:
             vid_url = item.get("play") # URL video asli no-watermark
             title = item.get("title", "TikTok Video")
@@ -226,32 +226,232 @@ def _search_facebook_rapidapi(query, limit):
         logging.error(f"RapidAPI FB Error: {e}")
         return []
 
+def _extract_ig_items(data, limit):
+    """Helper: ekstrak video items dari berbagai format respon IG RapidAPI (Instagram Scraper Stable API).
+    
+    Mendukung 2 format respon:
+    1. GraphQL hashtag format: {posts: {edges: [{node: {is_video, shortcode, ...}}]}}
+       → video_url tidak tersedia langsung, pakai shortcode → https://www.instagram.com/reel/{shortcode}
+    2. Generic format: [{video_url, caption, ...}] atau {data: [{...}]}
+    """
+    results = []
+    items = []
+    
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        # ── FORMAT 1: GraphQL hashtag (dari /search_hashtag.php) ──
+        # Struktur: {name, posts: {count, edges: [{node: {...}}]}, top_posts: {...}}
+        posts_data = data.get("posts", {})
+        top_posts_data = data.get("top_posts", {})
+        
+        edges = []
+        if isinstance(posts_data, dict) and "edges" in posts_data:
+            edges.extend(posts_data.get("edges", []))
+        if isinstance(top_posts_data, dict) and "edges" in top_posts_data:
+            edges.extend(top_posts_data.get("edges", []))
+        
+        if edges:
+            # Pass 1: filter hanya video nodes
+            for edge in edges:
+                node = edge.get("node", {}) if isinstance(edge, dict) else {}
+                if not node.get("is_video", False):
+                    continue
+                
+                shortcode = node.get("shortcode", "")
+                if not shortcode:
+                    continue
+                
+                ig_url = f"https://www.instagram.com/reel/{shortcode}/"
+                
+                caption = "Instagram Reel"
+                caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+                if caption_edges:
+                    raw_caption = caption_edges[0].get("node", {}).get("text", "")
+                    if raw_caption:
+                        caption = raw_caption[:200] + "..." if len(raw_caption) > 200 else raw_caption
+                
+                results.append({
+                    'title': caption,
+                    'url': ig_url,
+                    'platform': 'instagram'
+                })
+                
+                if len(results) >= limit:
+                    break
+            
+            # Pass 2: jika 0 video, ambil SEMUA post (yt-dlp bisa handle /p/ URL juga)
+            if not results:
+                logging.info("RapidAPI IG: 0 video di hashtag, fallback ke semua post (termasuk image).")
+                for edge in edges:
+                    node = edge.get("node", {}) if isinstance(edge, dict) else {}
+                    shortcode = node.get("shortcode", "")
+                    if not shortcode:
+                        continue
+                    
+                    # Gunakan /p/ URL untuk post generic (yt-dlp akan coba download)
+                    ig_url = f"https://www.instagram.com/p/{shortcode}/"
+                    
+                    caption = "Instagram Post"
+                    caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+                    if caption_edges:
+                        raw_caption = caption_edges[0].get("node", {}).get("text", "")
+                        if raw_caption:
+                            caption = raw_caption[:200] + "..." if len(raw_caption) > 200 else raw_caption
+                    
+                    results.append({
+                        'title': caption,
+                        'url': ig_url,
+                        'platform': 'instagram'
+                    })
+                    
+                    if len(results) >= limit:
+                        break
+            
+            return results
+        
+        # ── FORMAT 2: Generic flat list ──
+        inner = (data.get("data", None) or data.get("items", None) 
+                 or data.get("reels", None) or data.get("result", None) or data)
+        
+        if isinstance(inner, dict):
+            items = (inner.get("items", None) or inner.get("medias", None) 
+                     or inner.get("reels", None) or inner.get("data", None) or [])
+            if isinstance(items, dict):
+                items = items.get("items", items.get("medias", []))
+        elif isinstance(inner, list):
+            items = inner
+    
+    if not isinstance(items, list):
+        items = []
+    
+    for item in items[:limit]:
+        if not isinstance(item, dict):
+            continue
+        vid_url = (item.get("video_url") or item.get("play") 
+                   or item.get("url") or item.get("video_play_url"))
+        title = (item.get("caption") or item.get("title") 
+                 or item.get("text") or item.get("accessibility_caption") 
+                 or "Instagram Reel")
+        if isinstance(title, dict):
+            title = title.get("text", "Instagram Reel")
+        if isinstance(title, str) and len(title) > 200:
+            title = title[:200] + "..."
+        if vid_url:
+            results.append({'title': title, 'url': vid_url, 'platform': 'instagram'})
+    return results
+
+
 def _search_instagram_rapidapi(query, limit):
-    """Template RapidAPI Instagram Scraper API"""
+    """Instagram Scraper Stable API (by RockSolid APIs / thetechguy32744).
+    
+    Verified endpoints (RapidAPI docs):
+      1. POST /search_ig.php → Search users + hashtags by keyword
+      2. GET  /search_hashtag.php → Get posts & reels from a hashtag
+    
+    Flow: keyword → search_ig → extract hashtag → search_hashtag → get reels
+    Fallback: langsung coba hashtag dari keyword (strip spaces).
+    """
     if not RAPIDAPI_KEY or not RAPIDAPI_HOST_IG:
         return []
-        
-    url = f"https://{RAPIDAPI_HOST_IG}/v1/search/reels" 
-    querystring = {"keyword": query, "limit": limit}
+    
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": RAPIDAPI_HOST_IG
+        "x-rapidapi-host": RAPIDAPI_HOST_IG,
     }
+    
+    # ── TIER A: POST /search_ig.php (search keyword → users + hashtags) ──
+    search_url = f"https://{RAPIDAPI_HOST_IG}/search_ig.php"
     try:
-        response = requests.get(url, headers=headers, params=querystring, timeout=10)
+        payload = {"search_query": query}
+        headers_post = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+        response = requests.post(search_url, headers=headers_post, data=payload, timeout=15)
+        
+        if response.status_code == 429:
+            logging.warning("RapidAPI IG rate-limited (429) pada /search_ig.php. Kuota habis.")
+        elif response.status_code == 403:
+            logging.warning("RapidAPI IG 403 pada /search_ig.php — cek subscription.")
+        elif response.ok:
+            data = response.json()
+            # Coba ekstrak video langsung dari search results
+            results = _extract_ig_items(data, limit)
+            if results:
+                logging.info(f"RapidAPI IG berhasil via /search_ig.php ({len(results)} video)")
+                return results
+            
+            # Kalau tidak ada video langsung, cari hashtag dari hasil search
+            # lalu pakai /search_hashtag.php untuk ambil reels
+            hashtags = []
+            if isinstance(data, dict):
+                ht_data = data.get("data", data).get("hashtags", data.get("hashtags", []))
+                if isinstance(ht_data, list):
+                    for ht in ht_data:
+                        if isinstance(ht, dict):
+                            name = ht.get("name", ht.get("hashtag", ""))
+                            if name:
+                                hashtags.append(name.lstrip("#"))
+            
+            if hashtags:
+                logging.info(f"RapidAPI IG: ditemukan hashtag dari search: {hashtags[:3]}")
+                # Ambil reels dari hashtag pertama
+                ht_results = _search_ig_hashtag(hashtags[0], limit, headers)
+                if ht_results:
+                    return ht_results
+        else:
+            logging.warning(f"RapidAPI IG /search_ig.php status {response.status_code}: {response.text[:200]}")
+    except Exception as e:
+        logging.warning(f"RapidAPI IG Error pada /search_ig.php: {e}")
+    
+    # ── TIER B: GET /search_hashtag.php (langsung dari keyword) ──
+    # Buat hashtag dari keyword: "AI Tips" → "aitips"
+    hashtag_guess = query.lower().replace(" ", "").replace("-", "")
+    logging.info(f"RapidAPI IG: fallback hashtag search dengan '{hashtag_guess}'")
+    ht_results = _search_ig_hashtag(hashtag_guess, limit, headers)
+    if ht_results:
+        return ht_results
+    
+    # Coba juga keyword asli tanpa modifikasi (kadang hashtag ada spasinya)
+    if " " not in query:
+        pass  # sudah dicoba di atas
+    else:
+        # Coba kata pertama saja
+        first_word = query.split()[0].lower()
+        ht_results = _search_ig_hashtag(first_word, limit, headers)
+        if ht_results:
+            return ht_results
+    
+    logging.error(
+        "RapidAPI IG: semua endpoint gagal. "
+        "Pastikan sudah subscribe di https://rapidapi.com dan kuota belum habis."
+    )
+    return []
+
+
+def _search_ig_hashtag(hashtag, limit, headers):
+    """Helper: GET /search_hashtag.php — ambil posts & reels dari hashtag."""
+    host = headers.get("x-rapidapi-host", RAPIDAPI_HOST_IG)
+    url = f"https://{host}/search_hashtag.php"
+    params = {"hashtag": hashtag}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+        
+        if response.status_code == 429:
+            logging.warning(f"RapidAPI IG rate-limited (429) pada /search_hashtag.php?hashtag={hashtag}")
+            return []
+        if response.status_code == 403:
+            logging.warning(f"RapidAPI IG 403 pada /search_hashtag.php — cek subscription.")
+            return []
+            
         response.raise_for_status()
         data = response.json()
         
-        results = []
-        items = data.get("data", {}).get("reels", []) 
-        for item in items[:limit]:
-            vid_url = item.get("video_url")
-            title = item.get("caption", "Instagram Reel")
-            if vid_url:
-                results.append({'title': title, 'url': vid_url, 'platform': 'instagram'})
+        results = _extract_ig_items(data, limit)
+        if results:
+            logging.info(f"RapidAPI IG berhasil via /search_hashtag.php?hashtag={hashtag} ({len(results)} video)")
         return results
     except Exception as e:
-        logging.error(f"RapidAPI IG Error: {e}")
+        logging.warning(f"RapidAPI IG hashtag search error: {e}")
         return []
 
 
@@ -364,8 +564,8 @@ def download_video(url, output_dir=DOWNLOAD_DIR):
         # FFmpeg tersedia: bisa merge video+audio terpisah untuk kualitas terbaik
         ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
     else:
-        # FFmpeg TIDAK tersedia: gunakan format single-stream (sudah gabungan)
-        ydl_opts['format'] = 'best[ext=mp4]/best'
+        # FFmpeg TIDAK tersedia: gunakan format single-stream pre-merged ('b')
+        ydl_opts['format'] = 'b[ext=mp4]/b'
         logging.info("Menggunakan format single-stream (ffmpeg tidak tersedia)")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

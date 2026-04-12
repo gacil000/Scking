@@ -40,7 +40,7 @@ NGROK_PORT = 8000                # Port untuk Ngrok HTTP server
 VIDEO_OUTPUT_WIDTH = 720         # Lebar standar output video vertikal
 VIDEO_OUTPUT_HEIGHT = 1280       # Tinggi standar output video vertikal
 RENDER_THREADS = 4               # Jumlah thread untuk video rendering
-CAPTION_MAX_TOKENS = 150         # Max token untuk AI caption generation
+CAPTION_MAX_TOKENS = 400         # Max token untuk AI caption generation
 UPLOAD_POLL_DELAY = 2            # Delay (detik) setelah upload API call
 
 # ── Google Trends Configuration ──
@@ -48,7 +48,7 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "").strip()
 RAPIDAPI_HOST_TRENDS = os.getenv("RAPIDAPI_HOST_TRENDS", "google-trends-api.p.rapidapi.com").strip()
 RAPIDAPI_HOST_TIKTOK = os.getenv("RAPIDAPI_HOST_TIKTOK", "tiktok-scraper7.p.rapidapi.com").strip()
 RAPIDAPI_HOST_FB = os.getenv("RAPIDAPI_HOST_FB", "facebook-pages-scraper.p.rapidapi.com").strip()
-RAPIDAPI_HOST_IG = os.getenv("RAPIDAPI_HOST_IG", "instagram-scraper-api.p.rapidapi.com").strip()
+RAPIDAPI_HOST_IG = os.getenv("RAPIDAPI_HOST_IG", "instagram-scraper-stable-api.p.rapidapi.com").strip()
 
 MIN_TREND_SCORE = int(os.getenv("MIN_TREND_SCORE", "40"))
 ENABLE_TRENDS_CHECK = os.getenv("ENABLE_TRENDS_CHECK", "True").lower() in ('true', '1', 't')
@@ -83,8 +83,25 @@ def setup_logging():
         
     return logger
 
+def cleanup_temp_files():
+    """Membersihkan file ytdl residual dan file temp audio sisa moviepy di direktori downloads."""
+    if not os.path.exists(DOWNLOAD_DIR):
+        return
+    deleted_count = 0
+    for fname in os.listdir(DOWNLOAD_DIR):
+        if fname.endswith(".part") or fname.endswith(".ytdl") or fname.startswith("temp-audio-") or fname.endswith(".temp"):
+            filepath = os.path.join(DOWNLOAD_DIR, fname)
+            try:
+                os.remove(filepath)
+                deleted_count += 1
+            except OSError:
+                pass
+    if deleted_count > 0:
+        logging.getLogger(__name__).info(f"Cleanup: Berhasil menghapus {deleted_count} file sementara/residual.")
+
 def ensure_directories():
     """Memastikan bahwa folder esensial ada saat aplikasi startup."""
     if not os.path.exists(DOWNLOAD_DIR):
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
         logging.getLogger(__name__).info(f"Direktori {DOWNLOAD_DIR} berhasil dibuat.")
+    cleanup_temp_files()

@@ -1,6 +1,6 @@
 # Environment & Secrets
 .env
-
+test_api.json   
 # Database
 *.db
 

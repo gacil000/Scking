@@ -60,7 +60,9 @@ def _fetch_rapidapi(query):
         if items and isinstance(items, list):
             # Asumsi items[0] adalah keyword pencocokan pertama
             first_match = items[0]
-            search_volume = first_match.get("search_volume", first_match.get("sv", 0))
+            
+            # API google-keyword-insight1 menggunakan key 'volume', API lain pakai 'search_volume' / 'sv'
+            search_volume = first_match.get("volume", first_match.get("search_volume", first_match.get("sv", 0)))
             
             # --- KONVERSI SEARCH VOLUME KE SKOR TREND (0-100) ---
             # Asumsi: > 10.000 pencarian/bulan = Skor 100 (Sangat Viral)
