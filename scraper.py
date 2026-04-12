@@ -174,7 +174,7 @@ def _search_tiktok_rapidapi(query, limit):
     if not RAPIDAPI_KEY or not RAPIDAPI_HOST_TIKTOK:
         return []
         
-    url = f"https://{RAPIDAPI_HOST_TIKTOK}/feed/list"
+    url = f"https://{RAPIDAPI_HOST_TIKTOK}/feed/search"
     querystring = {"region": "ID", "keywords": query, "count": limit}
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
@@ -186,8 +186,14 @@ def _search_tiktok_rapidapi(query, limit):
         data = response.json()
         
         results = []
-        # Menggunakan struktur JSON riil dari tiktok-scraper7 (mereturn list di dalam key "data")
-        items = data.get("data", []) 
+        inner_data = data.get("data", {})
+        if isinstance(inner_data, dict):
+            items = inner_data.get("videos", [])
+        elif isinstance(inner_data, list):
+            items = inner_data
+        else:
+            items = []
+        
         for item in items[:limit]:
             vid_url = item.get("play") # URL video asli no-watermark
             title = item.get("title", "TikTok Video")
